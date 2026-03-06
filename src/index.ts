@@ -36,6 +36,10 @@ interface FileInfo {
   modificationTime: number;
 }
 
+interface BatchWriteResult {
+  writtenCount: number;
+}
+
 interface IExternalStorageModule {
   exists(path: string): Promise<boolean>;
   getInfo(path: string): Promise<FileInfo>;
@@ -50,6 +54,7 @@ interface IExternalStorageModule {
   readFileBase64(path: string): Promise<string>;
   writeFileUtf8(path: string, content: string): Promise<void>;
   writeFileBase64(path: string, base64Content: string): Promise<void>;
+  writeFilesBase64(paths: string[], base64Contents: string[]): Promise<BatchWriteResult>;
   deleteFile(path: string): Promise<void>;
 
   isExternalStorageWritable(): Promise<boolean>;
@@ -76,4 +81,4 @@ export function toPlainPath(uriOrPath: string): string {
   return uriOrPath;
 }
 
-export type { FileInfo, IExternalStorageModule };
+export type { BatchWriteResult, FileInfo, IExternalStorageModule };

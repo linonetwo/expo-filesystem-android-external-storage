@@ -132,6 +132,23 @@ class ExternalStorageModule : Module() {
       file.writeBytes(bytes)
     }
 
+    AsyncFunction("writeFilesBase64") { paths: List<String>, base64Contents: List<String> ->
+      if (paths.size != base64Contents.size) {
+        throw Exception("paths/base64Contents length mismatch: ${paths.size} vs ${base64Contents.size}")
+      }
+
+      for (index in paths.indices) {
+        val file = File(paths[index])
+        file.parentFile?.let { parent ->
+          if (!parent.exists()) parent.mkdirs()
+        }
+        val bytes = Base64.decode(base64Contents[index], Base64.DEFAULT)
+        file.writeBytes(bytes)
+      }
+
+      mapOf("writtenCount" to paths.size)
+    }
+
     AsyncFunction("deleteFile") { path: String ->
       val file = File(path)
       if (file.exists()) {
