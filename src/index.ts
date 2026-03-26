@@ -40,6 +40,18 @@ interface BatchWriteResult {
   writtenCount: number;
 }
 
+interface HttpPostToFileResult {
+  statusCode: number;
+  headers: Record<string, string>;
+  bytesWritten: number;
+}
+
+interface ReadFileChunkResult {
+  /** Base64-encoded chunk data */
+  data: string;
+  bytesRead: number;
+}
+
 interface IExternalStorageModule {
   exists(path: string): Promise<boolean>;
   getInfo(path: string): Promise<FileInfo>;
@@ -61,6 +73,34 @@ interface IExternalStorageModule {
   getExternalStorageDirectory(): Promise<string>;
   /** Android 11+ (API 30): check if MANAGE_EXTERNAL_STORAGE is granted. Pre-30 returns true. */
   isExternalStorageManager(): Promise<boolean>;
+
+  /**
+   * HTTP POST with the response body streamed directly to a file on disk,
+   * **never buffering the full response in JVM/Hermes heap**.
+   *
+   * Designed for git-upload-pack which can return 100+ MB packfiles.
+   *
+   * @param url         Target URL
+   * @param headers     HTTP headers as `{ key: value }`
+   * @param bodyBase64  Request body encoded as Base64 (binary git protocol data)
+   * @param destPath    Plain filesystem path to write the response body to
+   * @param contentType MIME type for the request body
+   */
+  httpPostToFile(
+    url: string,
+    headers: Record<string, string>,
+    bodyBase64: string,
+    destPath: string,
+    contentType: string,
+  ): Promise<HttpPostToFileResult>;
+
+  /**
+   * Read a chunk of a file starting at `offset` for up to `length` bytes.
+   * Returns Base64-encoded data and actual bytes read.
+   *
+   * Use this to stream a large file into JS in bounded-memory chunks.
+   */
+  readFileChunk(path: string, offset: number, length: number): Promise<ReadFileChunkResult>;
 }
 
 export const ExternalStorage: IExternalStorageModule = new Proxy({} as IExternalStorageModule, {
@@ -81,4 +121,4 @@ export function toPlainPath(uriOrPath: string): string {
   return uriOrPath;
 }
 
-export type { BatchWriteResult, FileInfo, IExternalStorageModule };
+export type { BatchWriteResult, FileInfo, HttpPostToFileResult, IExternalStorageModule, ReadFileChunkResult };

@@ -5,7 +5,15 @@ import android.os.Environment
 import android.util.Base64
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import okhttp3.Headers.Companion.toHeaders
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.io.FileOutputStream
+import java.io.RandomAccessFile
+import java.util.concurrent.TimeUnit
 
 /**
  * Expo native module that performs raw java.io.File I/O on external storage.
@@ -175,6 +183,111 @@ class ExternalStorageModule : Module() {
         Environment.isExternalStorageManager()
       } else {
         true
+      }
+    }
+
+    // --- Streaming HTTP → disk ---
+
+    /**
+     * Make an HTTP POST request and stream the response body directly to a file
+     * on disk, **never buffering the full body in JVM heap**.
+     *
+     * This is critical for git-upload-pack responses which can be 100+ MB.
+     * React Native's built-in `fetch()` goes through OkHttp but buffers the
+     * entire response in the JVM before handing it to Hermes, causing OOM.
+     *
+     * @param url         Target URL
+     * @param headersMap  HTTP headers as { key: value }
+     * @param bodyBase64  Request body encoded as Base64 (git protocol binary data)
+     * @param destPath    Plain filesystem path for the response file
+     * @param contentType MIME type for the request body
+     * @return Map with "statusCode", "headers" (Map<String,String>), "bytesWritten"
+     */
+    AsyncFunction("httpPostToFile") { url: String, headersMap: Map<String, String>, bodyBase64: String, destPath: String, contentType: String ->
+      val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)    // large packs take time
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+      val requestBody = Base64.decode(bodyBase64, Base64.DEFAULT)
+        .toRequestBody(contentType.toMediaType())
+
+      val request = Request.Builder()
+        .url(url)
+        .post(requestBody)
+        .headers(headersMap.toHeaders())
+        .build()
+
+      val response = client.newCall(request).execute()
+
+      val destFile = File(destPath)
+      destFile.parentFile?.let { parent ->
+        if (!parent.exists()) parent.mkdirs()
+      }
+
+      var bytesWritten = 0L
+      response.body?.let { body ->
+        body.byteStream().use { inputStream ->
+          FileOutputStream(destFile).use { outputStream ->
+            val buffer = ByteArray(64 * 1024) // 64 KB chunks
+            var read: Int
+            while (inputStream.read(buffer).also { read = it } != -1) {
+              outputStream.write(buffer, 0, read)
+              bytesWritten += read
+            }
+          }
+        }
+      }
+
+      val responseHeaders = mutableMapOf<String, String>()
+      for (name in response.headers.names()) {
+        response.headers[name]?.let { value ->
+          responseHeaders[name] = value
+        }
+      }
+
+      mapOf(
+        "statusCode" to response.code,
+        "headers" to responseHeaders,
+        "bytesWritten" to bytesWritten,
+      )
+    }
+
+    // --- Chunked file reading ---
+
+    /**
+     * Read a chunk of a file as Base64, starting at `offset` for up to `length`
+     * bytes.  Returns `{ data: string, bytesRead: number }`.
+     *
+     * This lets JS consume a large temp file in bounded-memory chunks without
+     * ever holding the full content in the Hermes heap.
+     */
+    AsyncFunction("readFileChunk") { path: String, offset: Long, length: Int ->
+      val file = RandomAccessFile(path, "r")
+      file.use { raf ->
+        val fileLength = raf.length()
+        if (offset >= fileLength) {
+          return@AsyncFunction mapOf(
+            "data" to "",
+            "bytesRead" to 0,
+          )
+        }
+        raf.seek(offset)
+        val toRead = minOf(length.toLong(), fileLength - offset).toInt()
+        val buffer = ByteArray(toRead)
+        val bytesRead = raf.read(buffer, 0, toRead)
+        if (bytesRead <= 0) {
+          return@AsyncFunction mapOf(
+            "data" to "",
+            "bytesRead" to 0,
+          )
+        }
+        val actual = if (bytesRead < toRead) buffer.copyOf(bytesRead) else buffer
+        mapOf(
+          "data" to Base64.encodeToString(actual, Base64.NO_WRAP),
+          "bytesRead" to bytesRead,
+        )
       }
     }
   }
