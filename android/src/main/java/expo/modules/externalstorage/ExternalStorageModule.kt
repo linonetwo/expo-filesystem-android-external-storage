@@ -241,10 +241,8 @@ class ExternalStorageModule : Module() {
       }
 
       val responseHeaders = mutableMapOf<String, String>()
-      for (name in response.headers.names()) {
-        response.headers[name]?.let { value ->
-          responseHeaders[name] = value
-        }
+      for (i in 0 until response.headers.size) {
+        responseHeaders[response.headers.name(i)] = response.headers.value(i)
       }
 
       mapOf(
